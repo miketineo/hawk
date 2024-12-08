@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>YOLO Object Detection</title>
+<style>
+  body {
+    margin: 0; 
+    padding: 0;
+    background: #1e1e1e;
+    font-family: Arial, sans-serif;
+    color: #fff;
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    justify-content: center;
+    height: 100vh; 
+  }
+
+  h1 {
+    margin: 20px 0 10px 0;
+    font-size: 24px;
+    text-align: center;
+  }
+
+  #container {
+    background: #2c2c2c;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+  }
+
+  #videoContainer {
+    position: relative;
+    display: inline-block;
+    margin-bottom: 10px;
+  }
+
+  #video {
+    width: 640px;
+    height: 480px;
+    background: #333;
+    border-radius: 4px;
+    object-fit: cover;
+  }
+
+  .box {
+    position: absolute;
+    border: 2px solid #ff4444;
+    pointer-events: none;
+    box-sizing: border-box;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+  }
+
+  .box .label {
+    background: rgba(255,68,68,0.8);
+    color: #fff;
+    padding: 2px 4px;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    border-radius: 2px 2px 0 0;
+  }
+
+  #controls {
+    margin: 10px 0;
+  }
+
+  #deviceSelect {
+    background: #1e1e1e;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 5px;
+    outline: none;
+  }
+
+  #deviceSelect:focus {
+    border-color: #666;
+  }
+</style>
+</head>
+<body>
+<h1>YOLO Object Detection</h1>
+<div id="container">
+  <div id="videoContainer">
+    <video id="video" autoplay muted playsinline></video>
+  </div>
+  <div id="controls">
+    <label for="deviceSelect">Select Camera:</label>
+    <select id="deviceSelect"></select>
+  </div>
+</div>
+
+<script>
+  // Replace with your inference server's endpoint
+  const wsUrl = "wss://e73c-91-72-148-110.ngrok-free.app/video_feed"; 
+  const socket = new WebSocket(wsUrl);
+
+  const video = document.getElementById('video');
+  const videoContainer = document.getElementById('videoContainer');
+  const deviceSelect = document.getElementById('deviceSelect');
+
+  let currentStream = null;
+  let canvas = document.createElement('canvas');
+  let ctx = canvas.getContext('2d');
+
+  // Enumerate devices and populate the dropdown
+  async function getDevices() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+    
+    deviceSelect.innerHTML = ''; // Clear previous options
+    videoDevices.forEach((device, index) => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `Camera ${index + 1}`;
+      deviceSelect.appendChild(option);
+    });
+  }
+
+  async function startVideo(deviceId) {
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
+    }
+
+    const constraints = {
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" }
+    };
+
+    try {
+      currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = currentStream;
+    } catch (err) {
+      console.error("Error accessing webcam:", err);
+    }
+  }
+
+  video.addEventListener('playing', () => {
+    const sendInterval = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        clearInterval(sendInterval);
+        return;
+      }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        if (blob) {
+          socket.send(blob);
+        }
+      }, 'image/jpeg');
+    }, 100); // about 10 fps
+  });
+
+  socket.onmessage = event => {
+    document.querySelectorAll('.box').forEach(el => el.remove());
+    
+    const data = JSON.parse(event.data);
+    const boxes = data.boxes;
+    
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const displayedWidth = video.offsetWidth;
+    const displayedHeight = video.offsetHeight;
+    const scaleX = displayedWidth / vw;
+    const scaleY = displayedHeight / vh;
+
+    for (let box of boxes) {
+      const { x, y, width, height, label } = box;
+
+      const boxDiv = document.createElement('div');
+      boxDiv.className = 'box';
+      boxDiv.style.left = (x * scaleX) + 'px';
+      boxDiv.style.top = (y * scaleY) + 'px';
+      boxDiv.style.width = (width * scaleX) + 'px';
+      boxDiv.style.height = (height * scaleY) + 'px';
+
+      const labelDiv = document.createElement('div');
+      labelDiv.className = 'label';
+      labelDiv.innerText = label;
+      boxDiv.appendChild(labelDiv);
+
+      videoContainer.appendChild(boxDiv);
+    }
+  };
+
+  socket.onerror = error => console.error("WebSocket error:", error);
+
+  // Populate camera list and start with default camera
+  getDevices().then(() => {
+    if (deviceSelect.options.length > 0) {
+      startVideo(deviceSelect.value);
+    }
+  });
+
+  // When user selects a different camera
+  deviceSelect.addEventListener('change', () => {
+    startVideo(deviceSelect.value);
+  });
+</script>
+</body>
+</html>
+
